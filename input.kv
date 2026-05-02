@@ -1,0 +1,84 @@
+#: import T input.T
+#:set font_size '20dp'
+
+<RichInput>:
+    canvas.before:
+        # Color:
+        #     rgba: self.background_color
+        # BorderImage:
+        #     border: self.border
+        #     pos: self.pos
+        #     size: self.size
+        #     source: self.background_active if self.focus else (self.background_disabled_normal if self.disabled else self.background_normal)
+        Color:
+            rgba:
+                (self.cursor_color
+                if self.focus and not self._cursor_blink
+                and int(self.x + self.padding[0]) <= self._cursor_visual_pos[0] <= int(self.x + self.width - self.padding[2])
+                else (0, 0, 0, 0))
+        Rectangle:
+            pos: self._cursor_visual_pos
+            size: root.cursor_width, -self._cursor_visual_height
+        Color:
+            rgba: self.disabled_foreground_color if self.disabled else (self.hint_text_color if not self.text else self.foreground_color)
+
+
+BoxLayout:
+    orientation: 'vertical'
+    padding: '20dp'
+    spacing: '10dp'
+    T:
+        font_size: font_size
+        size_hint_y: None
+        height: self.minimum_height
+        multiline: False
+        text: 'normal😂'
+
+    # T:
+    #     size_hint_y: None
+    #     font_size: font_size
+    #     height: self.minimum_height
+    #     multiline: False
+    #     password: True
+    #     password_mask: '•'
+    #     text: 'password'
+
+    T:
+        font_size: font_size
+        size_hint_y: None
+        height: self.minimum_height
+        multiline: False
+        readonly: True
+        text: 'readonly'
+
+    T:
+        font_size: font_size
+        size_hint_y: None
+        height: self.minimum_height
+        multiline: False
+        disabled: True
+        text: 'disabled'
+
+    T:
+        font_size: font_size
+        hint_text: 'normal with hint text'
+
+    T:
+        font_size: font_size
+        text: 'default'
+
+    T:
+        font_size: font_size
+        text: 'bubble & handles'
+        use_bubble: True
+        use_handles: True
+
+    T:
+        font_size: font_size
+        text: 'no wrap'
+        do_wrap: False
+
+    T:
+        font_size: font_size
+        text: 'multiline\nreadonly'
+        disabled: app.time % 5 < 2.5
