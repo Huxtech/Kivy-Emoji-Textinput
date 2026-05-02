@@ -2092,26 +2092,42 @@ class RichInput(FocusBehavior, Widget):
 
     def _get_text_width(self, text, tab_width, _label_cached):
         """Return the width of a text, according to the current line options"""
-        kw = self._get_line_options()
+        if not text:
+            return 0
 
+        kw = self._get_line_options() 
+        
         try:
-            cid = u'{}\0{}\0{}'.format(text, self.password, kw)
+            cid = u'{}\0{}\0{}\0custom_width'.format(text, self.password, kw)
         except UnicodeDecodeError:
-            cid = '{}\0{}\0{}'.format(text, self.password, kw)
+            cid = '{}\0{}\0{}\0custom_width'.format(text, self.password, kw)
 
         width = Cache_get('textinput.width', cid)
         if width:
             return width
-        if not _label_cached:
-            _label_cached = self._label_cached
+
         text = text.replace('\t', ' ' * tab_width)
-        if not self.password:
-            width = _label_cached.get_extents(text)[0]
-        else:
-            width = _label_cached.get_extents(
-                self.password_mask * len(text))[0]
-        Cache_append('textinput.width', cid, width)
-        return width
+
+        if self.password:
+            text = self.password_mask * len(text)
+
+        pt = PrettyText()
+        ntext = pt.parse_markup(pt.create_markup_text(text))
+
+        total_width = 0
+        for part in ntext:
+            lbl = Label(
+                text=part["text"],
+                font_size=self.font_size,
+                font_name=part.get("font", "Roboto")
+            )
+            lbl.refresh()
+            if lbl.texture:
+                total_width += lbl.texture.size[0]
+
+        total_width += 1
+        Cache_append('textinput.width', cid, total_width)
+        return total_width
 
     def on_cursor_blink(self, instance, value):
         """trigger blink event reset to switch blinking while focused"""
@@ -2195,6 +2211,8 @@ class RichInput(FocusBehavior, Widget):
         Refresh all the lines from a new text.
         By using cache in internal functions, this method should be fast.
         """
+        self._get_line_options()
+
         mode = 'all'
         if len(largs) > 1:
             mode, start, finish, _lines, _lines_flags, len_lines = largs
@@ -2226,21 +2244,15 @@ class RichInput(FocusBehavior, Widget):
                                _lines, _lines_labels, _line_rects)
 
         min_line_ht = self._label_cached.get_extents('_')[1]
-        # with markup texture can be of height `1`
         self.line_height = max(_lines_labels[0].height, min_line_ht)
-        # self.line_spacing = 2
-        # now, if the text change, maybe the cursor is not at the same place as
-        # before. so, try to set the cursor on the good place
+        
         row = self.cursor_row
         self.cursor = self.get_cursor_from_index(
             self.cursor_index() if cursor is None else cursor
         )
 
-        # if we back to a new line, reset the scroll, otherwise, the effect is
-        # ugly
         if self.cursor_row != row:
             self.scroll_x = 0
-        # with the new text don't forget to update graphics again
         self._trigger_update_graphics()
 
     def _insert_lines(self, start, finish, len_lines, _lines_flags,
