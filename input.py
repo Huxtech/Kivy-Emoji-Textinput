@@ -180,6 +180,7 @@ from kivy.utils import boundary, platform
 from kivy.uix.behaviors import FocusBehavior
 
 from kivy.core.text import Label, DEFAULT_FONT
+from kivy.core.text.markup import MarkupLabel
 from kivy.graphics import Color, Rectangle, PushMatrix, PopMatrix, Callback
 from kivy.graphics.context_instructions import Transform
 from kivy.graphics.texture import Texture
@@ -195,6 +196,12 @@ from kivy.properties import StringProperty, NumericProperty, \
     BoundedNumericProperty
 
 from prettytext import PrettyText
+from pathlib import Path
+from kivy.lang import Builder
+
+_KV_FILE = Path(__file__).with_name("input.kv")
+if _KV_FILE not in Builder.files:
+    Builder.load_file(str(_KV_FILE))
 
 __all__ = ('RichInput', )
 
@@ -224,7 +231,6 @@ FL_IS_NEWLINE = FL_IS_LINEBREAK | FL_IS_WORDBREAK
 # late binding
 Clipboard = None
 CutBuffer = None
-MarkupLabel = None
 _platform = platform
 
 # for reloading, we need to keep a list of textinput to retrigger the rendering
@@ -532,6 +538,8 @@ class RichInput(FocusBehavior, Widget):
         self._handle_right = None
         self._handle_middle = None
         self._bubble = None
+        self._pretty_text = PrettyText()
+        self._width_label_cache = {}
         self._lines_flags = []
         self._lines_labels = []
         self._lines_rects = []
@@ -2111,19 +2119,17 @@ class RichInput(FocusBehavior, Widget):
         if self.password:
             text = self.password_mask * len(text)
 
-        pt = PrettyText()
-        ntext = pt.parse_markup(pt.create_markup_text(text))
+        pt = self._pretty_text
+        ntext = pt.parse_markup(pt.create_markup_text(text, normal_font=self.font_name, foreground_color=self.foreground_color))
 
         total_width = 0
         for part in ntext:
-            lbl = Label(
-                text=part["text"],
-                font_size=self.font_size,
-                font_name=part.get("font", "Roboto")
-            )
-            lbl.refresh()
-            if lbl.texture:
-                total_width += lbl.texture.size[0]
+            font_name = part.get("font", "Roboto")
+            lbl = self._width_label_cache.get(font_name)
+            if lbl is None:
+                lbl = Label(font_size=self.font_size, font_name=font_name)
+                self._width_label_cache[font_name] = lbl
+            total_width += lbl.get_extents(part["text"])[0]
 
         total_width += 1
         Cache_append('textinput.width', cid, total_width)
@@ -2689,69 +2695,42 @@ class RichInput(FocusBehavior, Widget):
     def _create_line_label(self, text, hint=False):
         # Create a label from a text, using line options
         ntext = text.replace(u'\n', u'').replace(u'\t', u' ' * self.tab_width)
-        pt = PrettyText()
-        ntext = pt.parse_markup(pt.create_markup_text(ntext))
-        
+
         if self.password and not hint:  # Don't replace hint_text with *
             ntext = self.password_mask * len(ntext)
-            
-        return self.build_texture(ntext)
-    
+
+        if hint:
+            color = self.hint_text_color
+        elif self.disabled:
+            color = self.disabled_foreground_color
+        else:
+            color = self.foreground_color
+
+        markup_text = self._pretty_text.create_markup_text(
+            ntext, normal_font=self.font_name, foreground_color=color
+        )
+
+        return self.build_texture(markup_text)
+
 
     _tokenize_delimiters = u' .,:;!?\r\t'
-    
-    def build_texture(self, ntext):
-        labels = []
-        total_width = 1
-        max_height = 1
 
-        # STEP 1: Render all parts FIRST (no drawing yet)
-        for part in ntext:
-            label = Label(
-                text=part["text"],
-                font_size=self.font_size,
-                font_name=part.get("font", "Roboto")
-            )
-            label.refresh()
-
-            texture = label.texture
-            # print(texture.size)
-
-            labels.append((texture, part["color"]))
-            total_width += texture.size[0]
-            max_height = max(max_height, texture.size[1])
-
-        # STEP 2: Create ONE big texture
-        final_texture = Texture.create(size=(total_width, max_height))
-        # final_texture.blit_buffer(
-        #     bytes([0] * total_width * max_height * 4),
-        #     colorfmt='rgba',
-        #     bufferfmt='ubyte'
-        # )
-
-        # STEP 3: Fill pixel buffer manually
-        # (we copy each texture into final texture)
-        x_offset = 0
-
-        for texture, color in labels:
-            tex_buffer = texture.pixels  # raw pixels
-
-            temp = Texture.create(size=texture.size)
-            temp.blit_buffer(tex_buffer, colorfmt='rgba', bufferfmt='ubyte')
-
-            final_texture.blit_buffer(
-                tex_buffer,
-                pos=(x_offset, 0),
-                size=texture.size,
-                colorfmt='rgba'
-            )
-
-            x_offset += texture.size[0]
-
-        final_texture.flip_vertical()
-        
-
-        return final_texture
+    def build_texture(self, markup_text):
+        # Kivy's own markup renderer understands the [color=]/[font=] tags
+        # (and the &bl;/&br;/&amp; escapes) that create_markup_text produces,
+        # so a single Label does the multi-font/multi-color render in one
+        # pass -- no manual per-part Label creation or texture stitching
+        # needed. color=(1, 1, 1, 1) is the base/default for any run that
+        # isn't wrapped in its own [color=] tag (i.e. the emoji runs), so
+        # they're never tinted.
+        label = MarkupLabel(
+            text=markup_text,
+            font_size=self.font_size,
+            font_name=self.font_name,
+            color=(1, 1, 1, 1),
+        )
+        label.refresh()
+        return label.texture
 
 
     def _tokenize(self, text):
@@ -3538,8 +3517,7 @@ class RichInput(FocusBehavior, Widget):
         :class:`~kivy.properties.ColorProperty`.
     '''
 
-    # foreground_color = ColorProperty([0, 0, 0, 1])
-    foreground_color = ColorProperty([1, 1, 1, 1])
+    foreground_color = ColorProperty([0, 0, 0, 1])
     '''Current color of the foreground, in (r, g, b, a) format.
 
     .. versionadded:: 1.2.0
@@ -3995,25 +3973,5 @@ class RichInput(FocusBehavior, Widget):
     defaults to `True`.
     '''
 
-class T(RichInput):pass
+class HTextInput(RichInput):pass
 
-if __name__ == '__main__':
-    from textwrap import dedent
-    from kivy.app import App
-    from kivy.uix.boxlayout import BoxLayout
-    from kivy.lang import Builder
-
-    
-
-    class TextInputApp(App):
-        time = NumericProperty()
-
-        def build(self):
-            Clock.schedule_interval(self.update_time, 0)
-            # return T(text="otu")
-            return Builder.load_file("input.kv")
-
-        def update_time(self, dt):
-            self.time += dt
-
-    TextInputApp().run()
