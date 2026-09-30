@@ -87,7 +87,6 @@ class TextInputApp(App):
 
     def build(self):
         Clock.schedule_interval(self.update_time, 0)
-        # Builder.load_file("input.kv")
         return Builder.load_string(KV)
 
     def update_time(self, dt):

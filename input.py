@@ -194,8 +194,8 @@ from kivy.properties import StringProperty, NumericProperty, \
     BooleanProperty, AliasProperty, OptionProperty, \
     ListProperty, ObjectProperty, VariableListProperty, ColorProperty, \
     BoundedNumericProperty
-
-from prettytext import PrettyText
+try:from .prettytext import PrettyText
+except:from prettytext import PrettyText
 from pathlib import Path
 from kivy.lang import Builder
 
@@ -1416,19 +1416,27 @@ class RichInput(FocusBehavior, Widget):
                 0, int(viewport_width - self._get_row_width(cursor_y))
             )
 
-        for i in range(0, len(lines[cursor_y])):
-            line_y = lines[cursor_y]
+        line_y = lines[cursor_y]
+        # Use the same prefix-width metric as cursor_offset() and selection.
+        # Measuring line_y[i] independently is incorrect for emoji sequences
+        # because one visible glyph may contain several Unicode code points.
+        prefix_width = 0
+        for i in range(len(line_y)):
+            next_prefix_width = get_text_width(
+                line_y[:i + 1], tab_width, label_cached
+            )
 
-            if cursor_x + scroll_x < (
-                xoff
-                + get_text_width(line_y[:i], tab_width, label_cached)
-                + get_text_width(line_y[i], tab_width, label_cached) * 0.6
-                + padding_left
-            ):
+            # Place the cursor at the closest text boundary. This keeps mouse
+            # hit-testing aligned with the actual rendered texture, including
+            # flags, skin-tone sequences and ZWJ emoji.
+            midpoint = prefix_width + (next_prefix_width - prefix_width) * 0.5
+            if cursor_x + scroll_x < xoff + midpoint + padding_left:
                 cursor_x = i
                 break
+
+            prefix_width = next_prefix_width
         else:
-            cursor_x = len(lines[cursor_y])
+            cursor_x = len(line_y)
 
         return cursor_x, cursor_y
 
@@ -2099,41 +2107,53 @@ class RichInput(FocusBehavior, Widget):
         CutBuffer.set_cutbuffer(self.selection_text)
 
     def _get_text_width(self, text, tab_width, _label_cached):
-        """Return the width of a text, according to the current line options"""
+        """Return the exact pixel width used by the rendered line texture.
+
+        Measurement intentionally uses the same MarkupLabel renderer as
+        ``build_texture``. Measuring emoji/font runs separately with
+        ``Label.get_extents`` can disagree with the final shaped texture.
+        """
         if not text:
             return 0
 
-        kw = self._get_line_options() 
-        
+        kw = self._get_line_options()
         try:
-            cid = u'{}\0{}\0{}\0custom_width'.format(text, self.password, kw)
+            cid = u'{}\0{}\0{}\0{}\0{}\0custom_width'.format(
+                text, self.password, self.font_size, self.font_name, kw
+            )
         except UnicodeDecodeError:
-            cid = '{}\0{}\0{}\0custom_width'.format(text, self.password, kw)
+            cid = '{}\0{}\0{}\0{}\0{}\0custom_width'.format(
+                text, self.password, self.font_size, self.font_name, kw
+            )
 
         width = Cache_get('textinput.width', cid)
-        if width:
+        if width is not None:
             return width
 
-        text = text.replace('\t', ' ' * tab_width)
-
+        measured_text = text.replace('\t', ' ' * tab_width)
         if self.password:
-            text = self.password_mask * len(text)
+            measured_text = self.password_mask * len(measured_text)
 
-        pt = self._pretty_text
-        ntext = pt.parse_markup(pt.create_markup_text(text, normal_font=self.font_name, foreground_color=self.foreground_color))
+        markup_text = self._pretty_text.create_markup_text(
+            measured_text,
+            normal_font=self.font_name,
+            foreground_color=self.foreground_color
+        )
 
-        total_width = 0
-        for part in ntext:
-            font_name = part.get("font", "Roboto")
-            lbl = self._width_label_cache.get(font_name)
-            if lbl is None:
-                lbl = Label(font_size=self.font_size, font_name=font_name)
-                self._width_label_cache[font_name] = lbl
-            total_width += lbl.get_extents(part["text"])[0]
+        # This is deliberately the same renderer/options used by
+        # build_texture(). Do not replace this with Label.get_extents().
+        label = MarkupLabel(
+            text=markup_text,
+            font_size=self.font_size,
+            font_name=self.font_name,
+            color=(1, 1, 1, 1),
+        )
+        label.refresh()
 
-        total_width += 1
-        Cache_append('textinput.width', cid, total_width)
-        return total_width
+        texture = label.texture
+        width = texture.size[0] if texture is not None else 0
+        Cache_append('textinput.width', cid, width)
+        return width
 
     def on_cursor_blink(self, instance, value):
         """trigger blink event reset to switch blinking while focused"""
@@ -2204,6 +2224,7 @@ class RichInput(FocusBehavior, Widget):
 
     def _update_text_options(self, *largs):
         Cache_remove('textinput.width')
+        self._width_label_cache.clear()
         self._trigger_refresh_text()
 
     def _refresh_text_from_trigger(self, dt, *largs):
